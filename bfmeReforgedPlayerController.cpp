@@ -36,12 +36,6 @@ void AbfmeReforgedPlayerController::SetupInputComponent()
 	InputComponent->BindTouch(EInputEvent::IE_Pressed, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
 	InputComponent->BindTouch(EInputEvent::IE_Repeat, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
 
-	InputComponent->BindAction("ResetVR", IE_Pressed, this, &AbfmeReforgedPlayerController::OnResetVR);
-}
-
-void AbfmeReforgedPlayerController::OnResetVR()
-{
-	UHeadMountedDisplayFunctionLibrary::ResetOrientationAndPosition();
 }
 
 void AbfmeReforgedPlayerController::MoveToMouseCursor()
