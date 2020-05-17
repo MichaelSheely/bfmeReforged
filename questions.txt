@@ -1,0 +1,28 @@
+Documenting some questions which came up during implementation.
+
+What to do if unit walks forward into a crevice too narrow for them to
+turn out of accorrding to their fixed turning radius?
+  * Allow backing up (would look odd for many unit types)
+  * Allow a very low turning radius if unit has no forward velocity
+     * This would work OK for ships and flying units, less so for cavalry
+(Granted this is a rather pathological case.)
+
+Would it be possible to see the code used by other units during pathfinding?
+  * The current code for turn radius will eventually need to be integrated
+    with that of other units to avoid collisions. Want to make sure the
+    strategies are compatible.
+
+Are there details on how the Navigation mesh will take into account
+shroud / fog of war / visible terrain?  BMFE had three classifications:
+  * shroud (black) for completely unknown areas
+  * fog of war (terrain but no dynamic unit/building info) for
+    discovered but not currently visible terrain
+  * visible (able to see all)
+
+Currently my path planning behaves as if the entire map is visible, but this
+would certainly need to change at some point (units should not pathfind based
+on information they have not yet discovered).  I have tried to plan ahead for
+this by directly computing only a subset of the path and recalculating the
+path as the unit approaches their destination.  Hopefully this can be repurposed
+to account for gradual information gain (depending on units vision stat).
+
