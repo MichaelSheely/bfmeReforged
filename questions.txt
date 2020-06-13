@@ -7,6 +7,21 @@ turn out of accorrding to their fixed turning radius?
      * This would work OK for ships and flying units, less so for cavalry
 (Granted this is a rather pathological case.)
 
+-> Tested this with classic BFME2 (tested with Angmar troll stone thrower).
+Unit simply stops and rotates in place without a turn radius.
+Also tested use of "battle formations mode" (holding both mouse buttons + drag).
+In this case, the unit was also able to rotate on the spot without the use of
+a turning radius.  This seems to imply that the units turning radius depends on
+the speed of the unit (not necessarily linear), perhaps simply the picewise fn:
+```math
+$$ turning_radius(speed) = \left\{ \begin{array}{cc}
+0 \text{ when } speed = 0 \\
+R \text{ when } speed > 0
+\end{array} $$
+```
+where `R` is some parameter particular to the unit in question.
+
+
 Would it be possible to see the code used by other units during pathfinding?
   * The current code for turn radius will eventually need to be integrated
     with that of other units to avoid collisions. Want to make sure the
@@ -19,6 +34,7 @@ shroud / fog of war / visible terrain?  BMFE had three classifications:
     discovered but not currently visible terrain
   * visible (able to see all)
 
+
 Currently my path planning behaves as if the entire map is visible, but this
 would certainly need to change at some point (units should not pathfind based
 on information they have not yet discovered).  I have tried to plan ahead for
@@ -26,3 +42,7 @@ this by directly computing only a subset of the path and recalculating the
 path as the unit approaches their destination.  Hopefully this can be repurposed
 to account for gradual information gain (depending on units vision stat).
 
+
+Interesting finding: PFollowComp->GetStatus() returns
+EPathFollowingStatus::Moving even when it seems like movement
+should be completed (player pawn is right on top of the destination).
