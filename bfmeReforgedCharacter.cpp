@@ -67,7 +67,7 @@ void AbfmeReforgedCharacter::Tick(float DeltaSeconds)
 		FString float_str = FString::SanitizeFloat(runtime);
 		FString display = TEXT("Running time: ");
 		display += float_str;
-		GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
+		// GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
 	}
 
 	if (CursorToWorld != nullptr)
