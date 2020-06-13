@@ -23,8 +23,9 @@ protected:
   virtual void SetupInputComponent() override;
   // End PlayerController interface
 
-  /** Navigate player to the current mouse cursor location. */
-  void MoveToMouseCursor();
+  /** Calculates the path the player should take to the current
+   *  mouse cursor location. */
+  void ComputePathToCursor();
 
   /** Navigate player to the current touch location. */
   void MoveToTouchLocation(const ETouchIndex::Type FingerIndex, const FVector Location);
@@ -35,6 +36,17 @@ protected:
   /** Input handlers for SetDestination action. */
   void OnSetDestinationPressed();
   void OnSetDestinationReleased();
-};
 
+  TArray<FVector> current_path;
+  uint32 moving : 1;
+
+  struct TurningRadiusAwarePathPlan {
+    // We do not include all waypoints as we will likely have to recompute
+    // later ones.  We plan the initial steps and begin executing them, and
+    // we will eventually compute more.
+    TArray<FVector> initial_waypoints;
+    FVector final_destination;
+  };
+  TurningRadiusAwarePathPlan path_plan;
+};
 
