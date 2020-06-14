@@ -1,8 +1,9 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "bfmeReforgedPlayerController.h"
+#include "GenericPlatform/GenericPlatformMath.h"
 #include "Runtime/Engine/Classes/Components/DecalComponent.h"
-#include "bfmeReforgedCharacter.h"
+#include "MarkerActor.h"
 #include "Engine/World.h"
 
 // Probably don't need all of these, remove superfluous ones:
@@ -24,10 +25,13 @@
 #include "Logging/MessageLog.h"
 // END.
 
+constexpr float kCloseEnoughToDestination = 280.0f;
+
 AbfmeReforgedPlayerController::AbfmeReforgedPlayerController()
 {
   bShowMouseCursor = true;
   moving = false;
+  marked_circles = false;
   DefaultMouseCursor = EMouseCursor::Crosshairs;
 }
 
@@ -44,9 +48,15 @@ void AbfmeReforgedPlayerController::PlayerTick(float DeltaTime)
 
   if (!moving) return;
 
+  APawn* const pawn = GetPawn();
+  if (!pawn)
+  {
+    UE_LOG(LogTemp, Log, TEXT("Unexpected null pawn when trying to move character."));
+    return;
+  }
   float const distance_to_final_dest = FVector::Dist(
-      path_plan.final_destination, GetPawn()->GetActorLocation());
-  if (distance_to_final_dest < 300.0f)
+      path_plan.final_destination, pawn->GetActorLocation());
+  if (distance_to_final_dest < kCloseEnoughToDestination)
   {
     UE_LOG(LogTemp, Log, TEXT("Close enough to destination. Stopping movement."));
     moving = false;
@@ -59,20 +69,21 @@ void AbfmeReforgedPlayerController::PlayerTick(float DeltaTime)
   }
 
   float const distance_to_current_waypoint = FVector::Dist(
-      path_plan.initial_waypoints.Last(), GetPawn()->GetActorLocation());
+      path_plan.initial_waypoints.Last(), pawn->GetActorLocation());
 
   if (FMath::RandRange(0, 100) == 0)
   {
     UE_LOG(LogTemp, Log, TEXT("Distance to current waypoint is %f. Close enough? %d"),
-        distance_to_current_waypoint, (distance_to_current_waypoint < 300.0f));
+        distance_to_current_waypoint,
+        (distance_to_current_waypoint < kCloseEnoughToDestination));
   }
 
-  if (distance_to_current_waypoint < 300.0f) {
+  if (distance_to_current_waypoint < kCloseEnoughToDestination) {
     FVector waypoint = path_plan.initial_waypoints.Pop();
     UE_LOG(LogTemp, Log, TEXT("Close enough to waypoint (%f, %f, %f), popped."),
         waypoint.X, waypoint.Y, waypoint.Z);
   } else {
-    SetNewMoveDestination(path_plan.initial_waypoints.Last());
+    // SetNewMoveDestination(path_plan.initial_waypoints.Last());
   }
 }
 
@@ -87,7 +98,6 @@ void AbfmeReforgedPlayerController::SetupInputComponent()
   // support touch devices 
   InputComponent->BindTouch(EInputEvent::IE_Pressed, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
   InputComponent->BindTouch(EInputEvent::IE_Repeat, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
-
 }
 
 UPathFollowingComponent* InitNavigationControl(AController& Controller)
@@ -113,7 +123,156 @@ UPathFollowingComponent* InitNavigationControl(AController& Controller)
   return PathFollowingComp;
 }
 
-void MoveWithTurnRadius(AController* Controller, const FVector& GoalLocation, bool* still_moving)
+void AbfmeReforgedPlayerController::ComputePathToCursor()
+{
+  // Trace to see what is under the mouse cursor
+  FHitResult Hit;
+  GetHitResultUnderCursor(ECC_Visibility, false, Hit);
+
+  // FString display = TEXT("Running MoveToMouseCursor.");
+  // GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
+
+  // If we hit something, calculate path with turning radius to that point.
+  if (Hit.bBlockingHit)
+  {
+    // Clear out existing waypoints (if any).
+    path_plan.initial_waypoints.Empty();
+    path_plan.final_destination = Hit.ImpactPoint;
+    TArray<FVector> initial_waypoints =
+      ComputeTurningRadiusAwarePathTo(path_plan.final_destination);
+
+    // FVector waypoint;
+    // waypoint.X = -200.0;
+    // waypoint.Y = -670.8;
+    // waypoint.Z = 1.0;
+    // Push path points in reverse order.
+    // current_path.Push(Hit.ImpactPoint);
+    // current_path.Push(waypoint);
+    for (const FVector& waypoint : initial_waypoints)
+    {
+      path_plan.initial_waypoints.Push(waypoint);
+    }
+    // path_plan.initial_waypoints.Push(Hit.ImpactPoint);
+    // path_plan.initial_waypoints.Push(waypoint);
+    // UE_LOG(LogTemp, Log, TEXT(
+    //       "Set one waypoint (%f,%f,%f), on the path to (%f,%f,%f)."),
+    //     waypoint.X, waypoint.Y, waypoint.Z,
+    //     Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z);
+  }
+}
+
+TArray<FVector> TurningRadiusWaypointsAlongCircle(
+    FVector circle_center, FVector actor_loc, FVector destination)
+{
+  // TODO(msheely): Implement me.
+  TArray<FVector> waypoints;
+  waypoints.Push(destination);
+  return waypoints;
+}
+
+TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
+    FVector destination)
+{
+  // Note Z axis is currently ignored. All pathfinding is done on a grid.
+  // This is because (even for flying units) we can consider the map as
+  // a 2D space in terms of pathfinding. Flying units will be able to
+  // ignore obstacles on the map.
+  APawn* const pawn = GetPawn();
+  if (!pawn)
+  {
+    UE_LOG(LogTemp, Log, TEXT("Unexpected null pawn when trying to move character."));
+    return TArray<FVector>();
+  }
+  FVector actor_loc = pawn->GetActorLocation();
+  FVector actor_forward_vec = pawn->GetActorForwardVector();
+  UE_LOG(LogTemp, Log, TEXT(
+        "Unit at loc (%f,%f,%f) has forward vec (%f,%f,%f)."),
+        actor_loc.X, actor_loc.Y, actor_loc.Z,
+        actor_forward_vec.X, actor_forward_vec.Y, actor_forward_vec.Z);
+  // From the actor's perspective, there would be two circles tangent to the
+  // unit on their left and right with a radius equal to their turning radius.
+  // To find the center of the circle to the left of the unit, we use apply
+  // the rotation matrix [[0 -1] [1 0]] (a 90 degree clockwise rotation) to
+  // the unit's forward vector.  The matrix multiplication results in:
+  FVector left_circle_center_displacement(
+      -1 * actor_forward_vec.Y, actor_forward_vec.X, 0);
+  FVector right_circle_center_displacement(
+      -1 * left_circle_center_displacement.X,
+      -1 * left_circle_center_displacement.Y, 0);
+  // TODO(msheely): If unit it not moving, set turning radius to zero?
+  // Ensure that the displacement vectors have magnitude equal to the turning
+  // radius of the unit (in the plane).
+  float scaling_factor = turning_radius / FGenericPlatformMath::Sqrt(
+      (left_circle_center_displacement.X * left_circle_center_displacement.X) +
+      (left_circle_center_displacement.Y * left_circle_center_displacement.Y));
+  left_circle_center_displacement.X *= scaling_factor;
+  left_circle_center_displacement.Y *= scaling_factor;
+  right_circle_center_displacement.X *= scaling_factor;
+  right_circle_center_displacement.Y *= scaling_factor;
+  // Compute the center of the left and right circles.
+  FVector left_circle_center(
+      actor_loc.X + left_circle_center_displacement.X,
+      actor_loc.Y + left_circle_center_displacement.Y,
+      actor_loc.Z + left_circle_center_displacement.Z);
+  FVector right_circle_center(
+      actor_loc.X + right_circle_center_displacement.X,
+      actor_loc.Y + right_circle_center_displacement.Y,
+      actor_loc.Z + right_circle_center_displacement.Z);
+  if (!marked_circles) {
+    // Mark the circle centers on the map for debugging.
+    UE_LOG(LogTemp, Log, TEXT(
+          "Unit sf=%f, lcc=(%f,%f,%f) rcc=(%f,%f,%f)."),
+        scaling_factor, left_circle_center.X, left_circle_center.Y, 0,
+        right_circle_center.X, right_circle_center.Y, 0);
+    FRotator rotation(0, 0, 0);
+    FActorSpawnParameters params;
+    params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    GetWorld()->SpawnActor<AMarkerActor>(left_circle_center, rotation, params);
+    GetWorld()->SpawnActor<AMarkerActor>(right_circle_center, rotation, params);
+    // Only mark the circle centers once, even if mouse is held for more than
+    // a single tick.
+    marked_circles = true;
+  }
+
+  float dist_left_center =
+    FVector::Dist(left_circle_center, pawn->GetActorLocation());
+  float dist_right_center =
+    FVector::Dist(right_circle_center, pawn->GetActorLocation());
+  if (dist_left_center < turning_radius || dist_right_center < turning_radius)
+  {
+    // We are close enough to the destination we just need to turn and move
+    // slightly forward.  We will implement this later as it should be the
+    // simple case.  Using the turning radius is the more interesting case.
+    // For now, just set the final destination and use default pathfinding.
+    TArray<FVector> final_dest;
+    final_dest.Push(destination);
+    return final_dest;
+  }
+  if (dist_left_center < dist_right_center) {
+    return TurningRadiusWaypointsAlongCircle(
+        left_circle_center, actor_loc, destination);
+  } else {
+    return TurningRadiusWaypointsAlongCircle(
+        right_circle_center, actor_loc, destination);
+  }
+}
+
+void AbfmeReforgedPlayerController::MoveToTouchLocation(const ETouchIndex::Type FingerIndex, const FVector Location)
+{
+  FVector2D ScreenSpaceLocation(Location);
+
+  // Trace to see what is under the touch location
+  FHitResult HitResult;
+  GetHitResultAtScreenPosition(ScreenSpaceLocation, CurrentClickTraceChannel, true, HitResult);
+  if (HitResult.bBlockingHit)
+  {
+    // We hit something, move there
+    SetNewMoveDestination(HitResult.ImpactPoint);
+  }
+}
+
+void MoveWithTurnRadius(
+    AController* Controller, const FVector& GoalLocation, bool* still_moving)
 {
   UNavigationSystemV1* NavSys = Controller ? FNavigationSystem::GetCurrent<UNavigationSystemV1>(Controller->GetWorld()) : nullptr;
   if (NavSys == nullptr || Controller == nullptr || Controller->GetPawn() == nullptr)
@@ -205,7 +364,9 @@ void MoveWithTurnRadius(AController* Controller, const FVector& GoalLocation, bo
         // FAIMoveRequest move_request = FAIMoveRequest(GoalLocation);
         // move_request.SetUsePathfinding(false);
         // PFollowComp->RequestMove(move_request, Result.Path);
-        PFollowComp->RequestMove(FAIMoveRequest(GoalLocation), Result.Path);
+        FAIMoveRequest move_request(GoalLocation);
+        move_request.SetAcceptanceRadius(10.0f);
+        PFollowComp->RequestMove(move_request, Result.Path);
       }
       else if (PFollowComp->GetStatus() != EPathFollowingStatus::Idle)
       {
@@ -227,52 +388,6 @@ void MoveWithTurnRadius(AController* Controller, const FVector& GoalLocation, bo
   // }
 }
 
-void AbfmeReforgedPlayerController::ComputePathToCursor()
-{
-  // Trace to see what is under the mouse cursor
-  FHitResult Hit;
-  GetHitResultUnderCursor(ECC_Visibility, false, Hit);
-
-  // FString display = TEXT("Running MoveToMouseCursor.");
-  // GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
-
-  // If we hit something, calculate path with turning radius to that point.
-  if (Hit.bBlockingHit)
-  {
-    // Clear out existing waypoints (if any).
-    path_plan.initial_waypoints.Empty();
-    path_plan.final_destination = Hit.ImpactPoint;
-    FVector waypoint;
-    waypoint.X = -200.0;
-    waypoint.Y = -670.8;
-    waypoint.Z = 1.0;
-    // Push path points in reverse order.
-    // current_path.Push(Hit.ImpactPoint);
-    // current_path.Push(waypoint);
-    path_plan.initial_waypoints.Push(Hit.ImpactPoint);
-    path_plan.initial_waypoints.Push(waypoint);
-    UE_LOG(LogTemp, Log, TEXT(
-          "Set one waypoint (%f,%f,%f), on the path to (%f,%f,%f)."),
-        waypoint.X, waypoint.Y, waypoint.Z,
-        Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z);
-    // SetNewMoveDestination(Hit.ImpactPoint);
-  }
-}
-
-void AbfmeReforgedPlayerController::MoveToTouchLocation(const ETouchIndex::Type FingerIndex, const FVector Location)
-{
-  FVector2D ScreenSpaceLocation(Location);
-
-  // Trace to see what is under the touch location
-  FHitResult HitResult;
-  GetHitResultAtScreenPosition(ScreenSpaceLocation, CurrentClickTraceChannel, true, HitResult);
-  if (HitResult.bBlockingHit)
-  {
-    // We hit something, move there
-    SetNewMoveDestination(HitResult.ImpactPoint);
-  }
-}
-
 void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLocation)
 {
   // FString display = TEXT("Running SetNewMoveDestination.");
@@ -280,7 +395,7 @@ void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLoca
   APawn* const MyPawn = GetPawn();
   if (MyPawn)
   {
-    float const Distance = FVector::Dist(DestLocation, MyPawn->GetActorLocation());
+    // float const Distance = FVector::Dist(DestLocation, MyPawn->GetActorLocation());
 
     // FVector pawn_loc = MyPawn->GetActorLocation();
     // FString float_str = FString::SanitizeFloat(runtime);
@@ -289,11 +404,11 @@ void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLoca
     // GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
 
     // We need to issue move command only if far enough in order for walk animation to play correctly
-    if ((Distance > 120.0f))
+    // if ((Distance > 120.0f))
     {
       bool still_moving = true;
       MoveWithTurnRadius(this, DestLocation, &still_moving);
-      moving = still_moving;
+      // moving = still_moving;
     }
   }
 }
