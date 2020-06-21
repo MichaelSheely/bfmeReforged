@@ -1,8 +1,34 @@
 # Calculates and draws the tangent lines for a circle and a line.
+from PIL import Image, ImageDraw
 import argparse
+_Y_OFFSET = 457
+# x pixel count ~ 560
+# y pixel count 457
+
+# Returns (x0, y0, x1, y1) where (x0, y0) is the upper left hand corner of the
+# bounding box and (x1, y1) is the bottom right hand corner of the bounding
+# box of the circle defined by the given center and radius.
+def BoundingBoxOfCircle(center, radius):
+    x0 = center[0] - radius
+    y0 = center[1] - radius
+    x1 = center[0] + radius
+    y1 = center[1] + radius
+    return (x0, y0, x1, y1)
+
+def DrawArcInBox(draw, bounding_box):
+    draw.arc((bounding_box[0], _Y_OFFSET - bounding_box[3],
+        bounding_box[2], _Y_OFFSET - bounding_box[1]),
+        start=0, end=360)
+
+def DrawSegment(draw, p1, p2):
+    draw.line(((p1[0], _Y_OFFSET - p1[1]),
+              (p2[0], _Y_OFFSET - p2[1])))
+
 
 def main():
     parser = argparse.ArgumentParser(description='Take input circle and point and find tangent.')
+    parser.add_argument('--image_directory', type=str, required=False,
+            help='Path to directory containing the 600 x 458 blank canvas.png')
     parser.add_argument('--circle_radius', type=int, required=True, help='Radius of circle')
     parser.add_argument('--circle_center', type=int, nargs='+', required=True,
             help='Coordinates of circle center; x and y')
@@ -13,11 +39,23 @@ def main():
         print('Invalid POI or circle center coordinates')
     circle_center = (float(args.circle_center[0]), float(args.circle_center[1]))
     circle_radius = float(args.circle_radius)
+    path = args.image_directory
     poi = (float(args.poi[0]), float(args.poi[1]))
+
+    im = Image.open('{}/canvas.png'.format(path))
+    draw = ImageDraw.Draw(im)
+    DrawArcInBox(draw, BoundingBoxOfCircle(circle_center , circle_radius))
+    # to draw the point, we will draw a tiny circle centered at the point
+    DrawArcInBox(draw, BoundingBoxOfCircle(poi, 1))
 
     tan_intersect_1, tan_intersect_2 = FindTangentIntersections(
             circle_center, circle_radius, poi)
     print(tan_intersect_1, tan_intersect_2)
+
+    DrawSegment(draw, tan_intersect_1, poi)
+    DrawSegment(draw, tan_intersect_2, poi)
+    im.save('{}/circle_tangent.png'.format(path))
+
 
 # Test case 1:
 #  circle_center (5, 4)
@@ -102,7 +140,7 @@ def FindTangentIntersections(circle_center, circle_radius, poi):
         x2 = ( -B - (B**2 - 4*A*C)**(0.5) ) / (2*A)
         print('Intersection of line and circle at x = {{{}, {}}}'.format(x1, x2))
         y1 = m * ( x1 - px ) + py
-        return x1, y1
+        return x1.real, y1.real
     tangent_1 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m1)
     tangent_2 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m2)
     return (tangent_1, tangent_2)
