@@ -187,19 +187,19 @@ def FindSlopesTangentToCircle(circle_center, circle_radius, poi):
     cx, cy = circle_center
     R = circle_radius
     # The equation of a line with slope `m` going through `poi` is:
-    #   y - py = m ( x - px ).
+    #   y - p_y = m ( x - p_x ).
     # The equation of the circle in question is:
-    #   ( y - cy )^2 + ( x - cx )^2 = R^2
+    #   ( y - c_y )^2 + ( x - c_x )^2 = R^2
     # Thus, the intersection of the two curves is given by the equation:
-    #   ( m*x - m*px - py - cy )^2 + ( x - cx )^2 = R^2
+    #   ( m*x - m*p_x - p_y - c_y )^2 + ( x - c_x )^2 = R^2
 
     # Expanding and solving for x (algebra left as an exercise to the reader)
     # results in solving a quadratic, and depending on the value of m, the
     # quadratic solution will have zero, one, or two real valued solutions.
 
     # The fully expanded quadratic is:
-    #   (m^2 + 1)x^2 + (2m*py - 2m^2*px - 2m * cy - 2cx)x
-    #     + cx^2 - R^2 + (py - m*px - cy)^2 = 0
+    #   (m^2 + 1)x^2 + (2m*p_y - 2m^2*p_x - 2m * c_y - 2c_x)x
+    #     + c_x^2 - R^2 + (p_y - m*p_x - c_y)^2 = 0
     # Its roots represent the x values of the intersection(s).
 
     # We are interested in the tangent lines, which are those lines for which
@@ -214,10 +214,10 @@ def FindSlopesTangentToCircle(circle_center, circle_radius, poi):
     # solution for x, and thus the slopes which form tangent lines.
 
     # The discriminant is equal to zero exactly when:
-    #  (2m*py - 2px*m^2 - 2m*cy - 2cx) = (4m^2 + 4)(cx^2 - R^2 + (py - m*px - cy)^2)
+    #  (2m*p_y - 2p_x*m^2 - 2m*c_y - 2c_x) = (4m^2 + 4)(c_x^2 - R^2 + (p_y - m*p_x - c_y)^2)
 
     # We can fully expand and simplify this equation, representing it as a
-    # quadratic in terms of the slope `m`; A*m**2 + B*m + C = 0, where:
+    # quadratic in terms of the slope `m`; A*m^2 + B*m + C = 0, where:
     A = (8*cx*px - 4*px*px - 4*cx*cx + 4*R*R)
     B = (8*cx*cy - 8*cx*py - 8*cy*px + 8*px*py)
     C = (8*cy*py - 4*cy*cy - 4*py*py + 4*R*R)
@@ -240,19 +240,25 @@ def FindTangentIntersections(circle_center, circle_radius, poi):
         px, py = point_on_line
         m = slope
         # Once again, we get
-        #   ( m*x - m*px - py - cy )**2 + ( x - cx )**2 = R**2
+        #   ( m*x - m*p_x - p_y - c_y )^2 + ( x - c_x )^2 = R^2
         # Which once again reduces to:
-        #   (m^2 + 1)x^2 + (2m*py - 2m^2*px - 2m * cy - 2cx)x
-        #     + cx^2 - R^2 + (py - m*px - cy)^2 = 0
+        #   (m^2 + 1)x^2 + (2m*p_y - 2m^2*p_x - 2m * c_y - 2c_x)x
+        #     + c_x^2 - R^2 + (p_y - m*p_x - c_y)^2 = 0
         # Only this time, we know the value of `m` (the slope)!
         A = (m*m + 1)
         B = (2*m*py - 2*m*m*px - 2*m*cy - 2*cx)
         C = (cx*cx - R*R + (py - m*px - cy)**2)
-        x1 = ( -B + (B**2 - 4*A*C)**(0.5) ) / (2*A)
-        x2 = ( -B - (B**2 - 4*A*C)**(0.5) ) / (2*A)
-        print('Intersection of line and circle at x = {{{}, {}}}'.format(x1, x2))
-        y1 = m * ( x1 - px ) + py
-        return x1.real, y1.real
+        # Note that, due to our selection of `m1` and `m2` to be the slopes
+        # which form tangent lines, each slope will result in this quadratic
+        # having a discriminant of zero, which means that `x1 == x2`.
+        # Thus, we can short circuit the computation of both:
+        # x1 = ( -B + (B**2 - 4*A*C)**(0.5) ) / (2*A)
+        # x2 = ( -B - (B**2 - 4*A*C)**(0.5) ) / (2*A)
+        # and simply return the singleton value of x:
+        x = -B / ( 2*A )
+        print('Intersection of line and circle at x = {}'.format(x))
+        y = m * ( x - px ) + py
+        return x, y
     tangent_1 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m1)
     tangent_2 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m2)
     return (tangent_1, tangent_2)
