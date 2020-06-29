@@ -10,6 +10,7 @@
 #include "EngineGlobals.h"
 #include "TimerManager.h"
 #include "Engine/Engine.h"
+#include "Engine/EngineTypes.h"
 #include "AITypes.h"
 #include "AISystem.h"
 #include "BrainComponent.h"
@@ -31,6 +32,7 @@ AbfmeReforgedPlayerController::AbfmeReforgedPlayerController()
 {
   bShowMouseCursor = true;
   moving = false;
+  // If set to true, we do not mark circles on the map.
   marked_circles = false;
   DefaultMouseCursor = EMouseCursor::Crosshairs;
 }
@@ -54,37 +56,42 @@ void AbfmeReforgedPlayerController::PlayerTick(float DeltaTime)
     UE_LOG(LogTemp, Log, TEXT("Unexpected null pawn when trying to move character."));
     return;
   }
-  float const distance_to_final_dest = FVector::Dist(
-      path_plan.final_destination, pawn->GetActorLocation());
-  if (distance_to_final_dest < kCloseEnoughToDestination)
-  {
-    UE_LOG(LogTemp, Log, TEXT("Close enough to destination. Stopping movement."));
-    moving = false;
-    return;
-  }
+  // float const distance_to_final_dest = FVector::Dist(
+  //     path_plan.final_destination, pawn->GetActorLocation());
+  // if (distance_to_final_dest < kCloseEnoughToDestination)
+  // {
+  //   UE_LOG(LogTemp, Log, TEXT("Close enough to destination. Stopping movement."));
+  //   moving = false;
+  //   return;
+  // }
 
   if (path_plan.initial_waypoints.Num() == 0)
   {
+    UE_LOG(LogTemp, Log, TEXT("Arrived at destination. Stopping movement."));
+    moving = false;  // We made it!
+    return;
     // Need to compute more waypoints.
   }
 
   float const distance_to_current_waypoint = FVector::Dist(
       path_plan.initial_waypoints.Last(), pawn->GetActorLocation());
 
-  if (FMath::RandRange(0, 100) == 0)
-  {
-    UE_LOG(LogTemp, Log, TEXT("Distance to current waypoint is %f. Close enough? %d"),
-        distance_to_current_waypoint,
-        (distance_to_current_waypoint < kCloseEnoughToDestination));
-  }
+  // if (FMath::RandRange(0, 100) == 0)
+  // {
+  //   UE_LOG(LogTemp, Log, TEXT("Distance to current waypoint is %f. Close enough? %d"),
+  //       distance_to_current_waypoint,
+  //       (distance_to_current_waypoint < kCloseEnoughToDestination));
+  // }
 
-  if (distance_to_current_waypoint < kCloseEnoughToDestination) {
-    FVector waypoint = path_plan.initial_waypoints.Pop();
-    UE_LOG(LogTemp, Log, TEXT("Close enough to waypoint (%f, %f, %f), popped."),
-        waypoint.X, waypoint.Y, waypoint.Z);
-  } else {
-    // SetNewMoveDestination(path_plan.initial_waypoints.Last());
-  }
+  SetNewMoveDestination(path_plan.initial_waypoints.Last());
+
+  // if (distance_to_current_waypoint < kCloseEnoughToDestination) {
+  //   FVector waypoint = path_plan.initial_waypoints.Pop();
+  //   UE_LOG(LogTemp, Log, TEXT("Close enough to waypoint (%f, %f, %f), popped."),
+  //       waypoint.X, waypoint.Y, waypoint.Z);
+  // } else {
+  //   SetNewMoveDestination(path_plan.initial_waypoints.Last());
+  // }
 }
 
 void AbfmeReforgedPlayerController::SetupInputComponent()
@@ -138,9 +145,16 @@ void AbfmeReforgedPlayerController::ComputePathToCursor()
     // Clear out existing waypoints (if any).
     path_plan.initial_waypoints.Empty();
     path_plan.final_destination = Hit.ImpactPoint;
-    TArray<FVector> initial_waypoints =
-      ComputeTurningRadiusAwarePathTo(path_plan.final_destination);
-
+    UE_LOG(LogTemp, Log, TEXT("Move to (%f,%f,%f) requested."),
+        path_plan.final_destination.X,
+        path_plan.final_destination.Y,
+        path_plan.final_destination.Z);
+    bool success = ComputeTurningRadiusAwarePathTo(
+        path_plan.final_destination);
+    if (!success)
+    {
+      UE_LOG(LogTemp, Log, TEXT("Failed to construct turning radius path."));
+    }
     // FVector waypoint;
     // waypoint.X = -200.0;
     // waypoint.Y = -670.8;
@@ -148,10 +162,6 @@ void AbfmeReforgedPlayerController::ComputePathToCursor()
     // Push path points in reverse order.
     // current_path.Push(Hit.ImpactPoint);
     // current_path.Push(waypoint);
-    for (const FVector& waypoint : initial_waypoints)
-    {
-      path_plan.initial_waypoints.Push(waypoint);
-    }
     // path_plan.initial_waypoints.Push(Hit.ImpactPoint);
     // path_plan.initial_waypoints.Push(waypoint);
     // UE_LOG(LogTemp, Log, TEXT(
@@ -161,16 +171,243 @@ void AbfmeReforgedPlayerController::ComputePathToCursor()
   }
 }
 
-TArray<FVector> TurningRadiusWaypointsAlongCircle(
-    FVector circle_center, FVector actor_loc, FVector destination)
+void InterpolateArcBetween(
+    FVector center, float radius, FVector actor_loc, FVector final_point_on_circle,
+    AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan, bool is_left_circle, float speed)
 {
-  // TODO(msheely): Implement me.
-  TArray<FVector> waypoints;
-  waypoints.Push(destination);
-  return waypoints;
+  float actor_theta = FGenericPlatformMath::Atan2(
+      actor_loc.Y - center.Y, actor_loc.X - center.X);
+  float dest_theta = FGenericPlatformMath::Atan2(
+      final_point_on_circle.Y - center.Y, final_point_on_circle.X - center.X);
+  // The step size of the arc length is the speed of the actor.
+  float d_theta = speed / radius;
+  UE_LOG(LogTemp, Log, TEXT("Actor (%f,%f), last circle waypoint (%f,%f)"
+        "cirlce center (%f,%f), speed %f, radius %f"),
+      actor_loc.X, actor_loc.Y, final_point_on_circle.X,
+      final_point_on_circle.Y, center.X, center.Y, speed, radius);
+  UE_LOG(LogTemp, Log, TEXT("Actor theta %f, waypoint theta %f, d_theta %f."),
+      actor_theta, dest_theta, d_theta);
+  // This will track the actor's progress along the arc of the turning radius
+  // circle, starting at the actor's angle and ending at the final point on
+  // the circle -- after which the actor will leave the circle and follow the
+  // straight line path to their destination (as their heading will be such
+  // that they do not need to turn any further.
+  float theta = actor_theta;
+  // Consider consolidating the branches and have the only difference be
+  // the condition for when the while loop ends and how to increment, since
+  // the remainder (setting position and orientation) is the same.
+  if (is_left_circle)
+  {
+    // Moving left around the circle implies that actor_theta > dest_theta.
+    // Thus, we will move in the negative direction until reaching the
+    // final_point_on_circle, which occurs at angle dest_theta.
+    while (theta > dest_theta)
+    {
+      theta -= d_theta;
+      FVector arc_point(
+          radius * FGenericPlatformMath::Cos(theta) + center.X,
+          radius * FGenericPlatformMath::Sin(theta) + center.Y,
+          actor_loc.Z);
+      path_plan->initial_waypoints.Push(arc_point);
+    }
+  }
+  else
+  {
+    while (theta < dest_theta)
+    {
+      theta += d_theta;
+      FVector arc_point(
+          radius * FGenericPlatformMath::Cos(theta) + center.X,
+          radius * FGenericPlatformMath::Sin(theta) + center.Y,
+          actor_loc.Z);
+      path_plan->initial_waypoints.Push(arc_point);
+    }
+  }
 }
 
-TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
+void InterpolateLineSegmentBetween(
+    FVector p1, FVector p2, float speed, float actor_z_loc,
+    AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan)
+{
+  float delta_y = p2.Y - p1.Y;
+  float delta_x = p2.X - p1.X;
+  float distance = FGenericPlatformMath::Sqrt(delta_y*delta_y + delta_x*delta_x);
+  float dx = speed * FGenericPlatformMath::Cos(
+      FGenericPlatformMath::Atan2(delta_y, delta_x));
+  float dy = speed * FGenericPlatformMath::Sin(
+      FGenericPlatformMath::Atan2(delta_y, delta_x));
+  int steps_needed = static_cast<int>(distance / speed);
+  for (int i = 0; i < steps_needed; ++i)
+  {
+    FVector point(p1.X + i * dx, p1.Y + i * dy, actor_z_loc);
+    path_plan->initial_waypoints.Push(point);
+  }
+}
+
+void SetPathPlanArcAndLine(FVector circle_center, float radius,
+    FVector actor_loc, FVector final_point_on_circle, FVector destination,
+    AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan,
+    bool is_left_circle, float speed, UWorld* world, bool marked)
+{
+  UE_LOG(LogTemp, Log, TEXT("Final circle waypoint = (%f,%f,%f)."),
+      final_point_on_circle.X, final_point_on_circle.Y, final_point_on_circle.Z);
+  InterpolateArcBetween(circle_center, radius, actor_loc,
+      final_point_on_circle, path_plan, is_left_circle, speed);
+  int arc_waypoints = path_plan->initial_waypoints.Num();
+  UE_LOG(LogTemp, Log, TEXT("There were %d arc waypoints."), arc_waypoints);
+  if (arc_waypoints > 0) {
+    UE_LOG(LogTemp, Log, TEXT("Final arc waypoint was (%f, %f, %f)."),
+        path_plan->initial_waypoints.Last().X,
+        path_plan->initial_waypoints.Last().Y,
+        path_plan->initial_waypoints.Last().Z);
+  }
+  InterpolateLineSegmentBetween(
+      final_point_on_circle, destination, speed, actor_loc.Z, path_plan);
+  path_plan->initial_waypoints.Push(destination);
+  // This is silly, let's put them in the path in the correct order initially.
+  TArray<FVector> copy = path_plan->initial_waypoints;
+  path_plan->initial_waypoints.Empty();
+  for (int i = 0; i < copy.Num(); ++i)
+  {
+    if (!marked) {
+      FRotator rotation(0,0,0);
+      FActorSpawnParameters params;
+      params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+      world->SpawnActor<AMarkerActor>(copy[copy.Num() - i - 1], rotation, params);
+    }
+    path_plan->initial_waypoints.Push(copy[copy.Num() - i - 1]);
+  }
+}
+
+void FindSlopesTangentToCircle(
+    FVector circle_center, float radius, FVector destination,
+    float* m1, float* m2)
+{
+  float px = destination.X;
+  float py = destination.Y;
+  float cx = circle_center.X;
+  float cy = circle_center.Y;
+  float R = radius;
+  UE_LOG(LogTemp, Log, TEXT("px %f py %f cx %f cy %f R %f"),
+      px, py, cx, cy, R);
+  float A = 8*cx*px - 4*px*px - 4*cx*cx + 4*R*R;
+  float B = 8*cx*cy - 8*cx*py - 8*cy*px + 8*px*py;
+  float C = 8*cy*py - 4*cy*cy - 4*py*py + 4*R*R;
+  UE_LOG(LogTemp, Log, TEXT("A=%f, B=%f, C=%f"), A, B, C);
+  *m1 = ( -B + FGenericPlatformMath::Sqrt(B*B - 4*A*C) ) / (2*A);
+  *m2 = ( -B - FGenericPlatformMath::Sqrt(B*B - 4*A*C) ) / (2*A);
+}
+
+void TangentIntersectionOfCircleAndLine(
+    FVector circle_center, float circle_radius,
+    FVector point_on_line, float tangent_line_slope,
+    FVector* tangent_intersection)
+{
+  float px = point_on_line.X;
+  float py = point_on_line.Y;
+  float cx = circle_center.X;
+  float cy = circle_center.Y;
+  float m = tangent_line_slope;
+  float R = circle_radius;
+  float A = m*m + 1;
+  float B = 2*m*py - 2*m*m*px - 2*m*cy - 2*cx;
+  // We do not need to calculate C because our choice of `slope`
+  // ensures that the line is tangent to the circle, meaning there
+  // will be only one intersection, which means that there is only
+  // one real valued solution to the equation, which means that
+  // the discriminant of the quadratic is zero.
+  // float C = cx*cx - R*R + (py - m*px - cy)*(py - m*px - cy);
+  // The quadratic formula simplifies immensely when the discriminant is zero:
+  tangent_intersection->X = -B / ( 2 * A );
+  tangent_intersection->Y = m * ( tangent_intersection->X - px ) + py;
+}
+
+enum TangentPointOrdinal {
+  TAN_INTERSECT_1,
+  TAN_INTERSECT_2,
+};
+
+void FindTangentIntersections(
+    FVector circle_center, float radius, FVector destination,
+    FVector* tan_intersect_1, FVector* tan_intersect_2)
+{
+  float m1, m2;
+  FindSlopesTangentToCircle(circle_center, radius, destination, &m1, &m2);
+  UE_LOG(LogTemp, Log, TEXT("Slopes tangent to circle = { %f, %f }."), m1, m2);
+  TangentIntersectionOfCircleAndLine(
+      circle_center, radius, destination, m1, tan_intersect_1);
+  TangentIntersectionOfCircleAndLine(
+      circle_center, radius, destination, m2, tan_intersect_2);
+}
+
+// Starting at the angle (from zero) made by the actor, determines which of the
+// two tangent line intersections would be encountered first as the positive
+// value of the angle increases.  In UE4's left handed coordinate system, this
+// means rotation clockwise from the actor's angle.
+TangentPointOrdinal DetermineFirstIntersectionPointEncountered(
+    FVector actor_loc, FVector tan_intersect_1, FVector tan_intersect_2,
+    FVector circle_center)
+{
+  float theta_actor = FGenericPlatformMath::Atan2(
+      actor_loc.Y - circle_center.Y,
+      actor_loc.X - circle_center.X);
+  float theta_1 = FGenericPlatformMath::Atan2(
+      tan_intersect_1.Y - circle_center.Y,
+      tan_intersect_1.X - circle_center.X);
+  float theta_2 = FGenericPlatformMath::Atan2(
+      tan_intersect_2.Y - circle_center.Y,
+      tan_intersect_2.X - circle_center.X);
+  UE_LOG(LogTemp, Log, TEXT(
+        "tanx1 (%f,%f) has theta %f, tanx2 (%f,%f) has theta %f"),
+      tan_intersect_1.X, tan_intersect_1.Y, theta_1,
+      tan_intersect_2.X, tan_intersect_2.Y, theta_2);
+  UE_LOG(LogTemp, Log, TEXT("actor (%f,%f) has theta %f"),
+      actor_loc.X, actor_loc.Y, theta_actor);
+  if ((theta_actor < theta_1 && theta_actor < theta_2) ||
+      (theta_actor > theta_1 && theta_actor > theta_2))
+  {
+    UE_LOG(LogTemp, Log, TEXT("Actor proj not inside intersections, picked %s"),
+          theta_1 < theta_2 ? TEXT("TANX_1") : TEXT("TANX_2"));
+    return theta_1 < theta_2 ? TAN_INTERSECT_1 : TAN_INTERSECT_2;
+  }
+  // This means that the player is located in between the two tangent line
+  // intersections.
+  UE_LOG(LogTemp, Log, TEXT("Actor proj between intersections, picked %s"),
+        theta_1 > theta_2 ? TEXT("TANX_1") : TEXT("TANX_2"));
+  return theta_1 > theta_2 ? TAN_INTERSECT_1 : TAN_INTERSECT_2;
+}
+
+FVector SelectAppropriateWaypoint(
+    FVector actor_loc, FVector tan_intersect_1, FVector tan_intersect_2,
+    FVector circle_center, bool is_left_circle)
+{
+  TangentPointOrdinal first_intersection =
+    DetermineFirstIntersectionPointEncountered(
+        actor_loc, tan_intersect_1, tan_intersect_2, circle_center);
+  // If right hand circle, the actor would move along the circle in the positive
+  // direction, so we would return the first intersection encountered (moving
+  // positively). If left hand circle, this is reversed, as the first point
+  // the actor will encountered will be the second one we encountered (because
+  // we were rotating in the opposite direction).
+  if (is_left_circle ^ (first_intersection == TAN_INTERSECT_1))
+  {
+    return tan_intersect_1;
+  }
+  return tan_intersect_2;
+}
+
+FVector SelectWaypointOnCircle(FVector actor_loc, FVector circle_center,
+    float radius, FVector destination, bool is_left_circle)
+{
+  FVector tan_intersect_1, tan_intersect_2;
+  FindTangentIntersections(
+      circle_center, radius, destination,
+      &tan_intersect_1, &tan_intersect_2);
+  return SelectAppropriateWaypoint(actor_loc, tan_intersect_1, tan_intersect_2,
+      circle_center, is_left_circle);
+}
+
+bool AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
     FVector destination)
 {
   // Note Z axis is currently ignored. All pathfinding is done on a grid.
@@ -181,9 +418,11 @@ TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
   if (!pawn)
   {
     UE_LOG(LogTemp, Log, TEXT("Unexpected null pawn when trying to move character."));
-    return TArray<FVector>();
+    return false;
   }
   FVector actor_loc = pawn->GetActorLocation();
+  // Only move in the 2D plane, for now.
+  destination.Z = actor_loc.Z;
   FVector actor_forward_vec = pawn->GetActorForwardVector();
   UE_LOG(LogTemp, Log, TEXT(
         "Unit at loc (%f,%f,%f) has forward vec (%f,%f,%f)."),
@@ -193,15 +432,17 @@ TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
   // unit on their left and right with a radius equal to their turning radius.
   // To find the center of the circle to the left of the unit, we use apply
   // the rotation matrix [[0 -1] [1 0]] (a 90 degree clockwise rotation) to
-  // the unit's forward vector.  The matrix multiplication results in:
-  FVector left_circle_center_displacement(
-      -1 * actor_forward_vec.Y, actor_forward_vec.X, 0);
+  // the unit's forward vector.  Note that because UE4 uses a left handed
+  // coordinate system, we swap the left and right if we are looking down
+  // on the game.  This matrix multiplication results in:
   FVector right_circle_center_displacement(
-      -1 * left_circle_center_displacement.X,
-      -1 * left_circle_center_displacement.Y, 0);
-  // TODO(msheely): If unit it not moving, set turning radius to zero?
+      -1 * actor_forward_vec.Y, actor_forward_vec.X, 0);
+  FVector left_circle_center_displacement(
+      -1 * right_circle_center_displacement.X,
+      -1 * right_circle_center_displacement.Y, 0);
   // Ensure that the displacement vectors have magnitude equal to the turning
   // radius of the unit (in the plane).
+  // TODO(msheely): If unit it not moving, set turning radius to zero?
   float scaling_factor = turning_radius / FGenericPlatformMath::Sqrt(
       (left_circle_center_displacement.X * left_circle_center_displacement.X) +
       (left_circle_center_displacement.Y * left_circle_center_displacement.Y));
@@ -218,12 +459,12 @@ TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
       actor_loc.X + right_circle_center_displacement.X,
       actor_loc.Y + right_circle_center_displacement.Y,
       actor_loc.Z + right_circle_center_displacement.Z);
-  if (!marked_circles) {
+  UE_LOG(LogTemp, Log, TEXT(
+        "Unit sf=%f, lcc=(%f,%f) rcc=(%f,%f)."),
+      scaling_factor, left_circle_center.X, left_circle_center.Y,
+      right_circle_center.X, right_circle_center.Y);
+  if (false) {
     // Mark the circle centers on the map for debugging.
-    UE_LOG(LogTemp, Log, TEXT(
-          "Unit sf=%f, lcc=(%f,%f,%f) rcc=(%f,%f,%f)."),
-        scaling_factor, left_circle_center.X, left_circle_center.Y, 0,
-        right_circle_center.X, right_circle_center.Y, 0);
     FRotator rotation(0, 0, 0);
     FActorSpawnParameters params;
     params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -233,28 +474,44 @@ TArray<FVector> AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
     // a single tick.
     marked_circles = true;
   }
-
-  float dist_left_center =
-    FVector::Dist(left_circle_center, pawn->GetActorLocation());
-  float dist_right_center =
-    FVector::Dist(right_circle_center, pawn->GetActorLocation());
+  // Check which circle has a center closer to our final destination.
+  // That is the circle around which the unit should turn when travelling.
+  float dist_left_center = FVector::Dist(left_circle_center, destination);
+  float dist_right_center = FVector::Dist(right_circle_center, destination);
   if (dist_left_center < turning_radius || dist_right_center < turning_radius)
   {
     // We are close enough to the destination we just need to turn and move
     // slightly forward.  We will implement this later as it should be the
     // simple case.  Using the turning radius is the more interesting case.
     // For now, just set the final destination and use default pathfinding.
-    TArray<FVector> final_dest;
-    final_dest.Push(destination);
-    return final_dest;
+    path_plan.initial_waypoints.Push(destination);
+    // TODO: Set forward_vectors to final destination.
+    // Consider edge case of speed * tick_duration << turning radius,
+    // in which case there could be a situation where rotation + directly
+    // moving to the destination may violate the actor's move abilities.
+    return true;
   }
   if (dist_left_center < dist_right_center) {
-    return TurningRadiusWaypointsAlongCircle(
-        left_circle_center, actor_loc, destination);
+    UE_LOG(LogTemp, Log, TEXT("Picked left circle (closer center)."));
+    FVector final_point_on_circle = SelectWaypointOnCircle(
+        actor_loc, left_circle_center, turning_radius,
+        destination, /*is_left_circle=*/true);
+    SetPathPlanArcAndLine(
+        left_circle_center, turning_radius, actor_loc, final_point_on_circle,
+        destination, &path_plan, /*is_left_circle=*/true, actor_speed,
+        GetWorld(), marked_circles);
   } else {
-    return TurningRadiusWaypointsAlongCircle(
-        right_circle_center, actor_loc, destination);
+    UE_LOG(LogTemp, Log, TEXT("Picked right circle (closer center)."));
+    FVector final_point_on_circle = SelectWaypointOnCircle(
+        actor_loc, right_circle_center, turning_radius,
+        destination, /*is_left_circle=*/false);
+    SetPathPlanArcAndLine(
+        right_circle_center, turning_radius, actor_loc,
+        final_point_on_circle, destination, &path_plan,
+        /*is_left_circle=*/false, actor_speed, GetWorld(), marked_circles);
   }
+  marked_circles = true;
+  return true;
 }
 
 void AbfmeReforgedPlayerController::MoveToTouchLocation(const ETouchIndex::Type FingerIndex, const FVector Location)
@@ -403,12 +660,35 @@ void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLoca
     // display += float_str;
     // GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
 
-    // We need to issue move command only if far enough in order for walk animation to play correctly
+    // We need to issue move command only if far enough in order for walk
+    // animation to play correctly
     // if ((Distance > 120.0f))
     {
-      bool still_moving = true;
-      MoveWithTurnRadius(this, DestLocation, &still_moving);
+      // bool still_moving = true;
+      // MoveWithTurnRadius(this, DestLocation, &still_moving);
       // moving = still_moving;
+      if (path_plan.initial_waypoints.Num() == 0)
+      {
+        UE_LOG(LogTemp, Log, TEXT("SetNewMoveDestination called when path "
+              "plan was empty. Should never happen."));
+        // We made it.
+        moving = false;
+      }
+      // Just for testing purposes, until we tie speeds to TickRate, we will
+      // only have the next point pop off a certain percentage of the time. This
+      // will ensure it is slow enough to see what is going on while debugging.
+      // if (FMath::RandRange(0, 50) == 0)
+      if (false)
+      {
+        // Move to the next waypoint. TODO: Update unit forward vector.
+        FVector waypoint = path_plan.initial_waypoints.Pop();
+        // UE_LOG(LogTemp, Log, TEXT("Moving to waypoint (%f,%f,%f)"),
+        //     waypoint.X, waypoint.Y, 0);
+        bool check_for_collisions_on_path = false;
+        FHitResult hit_result;
+        MyPawn->SetActorLocation(waypoint, check_for_collisions_on_path,
+            &hit_result, ETeleportType::TeleportPhysics);
+      }
     }
   }
 }
