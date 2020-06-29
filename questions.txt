@@ -43,6 +43,24 @@ path as the unit approaches their destination.  Hopefully this can be repurposed
 to account for gradual information gain (depending on units vision stat).
 
 
+How to people visualize their computations to double check / screenshot?
+(e.g. drawing paths on the terrain to sanity check the planned route?)
+I had a bad solution of dropped some large artifacts on the map and then
+marking them as dropped, but there must be a standard way of doing this.
+
+
+Camera stuff (bfme has separate camera controlled by player not affected
+by unit movement).  Currently camera is following the actor as they move,
+but of course in bfme we don't want camera to be affected by units.
+Not sure how the code for overhead camera control will work in bfme:R.
+-> Not sure if this is the best way to go about this, but I resolved this
+by adding a fixed camera to the stage by using
+`Window > Editor Modes > Modes Panel` and then adding a default camera to the
+level.  After this, it can be set as the recording device by using the
+`World Outliner` pane to edit the CameraActor and setting it to be
+"piloted" so that it is used for populating the viewport.
+
+
 Interesting finding: PFollowComp->GetStatus() returns
 EPathFollowingStatus::Moving even when it seems like movement
 should be completed (player pawn is right on top of the destination).
