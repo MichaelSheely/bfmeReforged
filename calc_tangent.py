@@ -40,6 +40,9 @@ def InterpolateArcBetween(p1, p2, center, is_left_circle, radius, speed):
     d_theta = arc_length_step_size / radius
     theta = p1_theta
     points = []
+    print('actor ({}, {}), last circle waypoint ({}, {})'
+          'circle center ({}, {}), speed {}, radius {}'.format(
+              p1[0], p1[1], p2[0], p2[1], center[0], center[1], speed, radius))
     print('p1_theta: {}, p2_theta: {}, d_theta: {}'.format(p1_theta, p2_theta, d_theta))
     # make sure this will terminate
     if is_left_circle:
@@ -117,14 +120,15 @@ def SelectAppropriateWaypoint(player_location, tan_intersect_1, tan_intersect_2,
     return tan_intersect_2 if first_intersection_ccw == _INTERSECT_1 else tan_intersect_1
 
 
+
 def main():
     parser = argparse.ArgumentParser(description='Take input circle and point and find tangent.')
     parser.add_argument('--image_directory', type=str, required=False,
             help='Path to directory where we will write output images.')
-    parser.add_argument('--turning_radius', type=int, required=True, help='Radius of circle')
-    parser.add_argument('--player_location', type=int, nargs='+', required=True,
+    parser.add_argument('--turning_radius', type=float, required=True, help='Radius of circle')
+    parser.add_argument('--player_location', type=float, nargs='+', required=True,
             help='Coordinates of circle center; x and y')
-    parser.add_argument('--poi', type=int, nargs='+', required=True,
+    parser.add_argument('--poi', type=float, nargs='+', required=True,
             help='Coordinates of point of interest; x and y')
     args = parser.parse_args()
     if len(args.poi) != 2 or len(args.player_location) != 2:
@@ -133,7 +137,8 @@ def main():
     poi = (float(args.poi[0]), float(args.poi[1]))
     player_location = (float(args.player_location[0]), float(args.player_location[1]))
     circle_radius = float(args.turning_radius)
-    player_orientation = -math.pi / 4
+    # player_orientation = -math.pi / 4
+    player_orientation = 0
     circle_center, is_left_circle = DetermineCircle(player_location, player_orientation, poi, circle_radius)
     print('Will use the {} circle.'.format('left' if is_left_circle else 'right'))
 
@@ -157,7 +162,7 @@ def main():
     waypoint = SelectAppropriateWaypoint(player_location, tan_intersect_1, tan_intersect_2, circle_center, is_left_circle)
     print('Picked {} as waypoint.'.format(waypoint))
     # how fast the object can travel
-    speed = 7.0
+    speed = 2.0
     arc_points = InterpolateArcBetween(player_location, waypoint,
             circle_center, is_left_circle, circle_radius, speed)
     line_segment_points = InterpolateLineSegmentBetween(waypoint, poi, speed)
@@ -262,5 +267,6 @@ def FindTangentIntersections(circle_center, circle_radius, poi):
     tangent_1 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m1)
     tangent_2 = IntersectionOfCircleAndLine(circle_center, circle_radius, poi, m2)
     return (tangent_1, tangent_2)
+
 
 main()
