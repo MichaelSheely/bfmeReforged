@@ -33,7 +33,7 @@ AbfmeReforgedPlayerController::AbfmeReforgedPlayerController()
   bShowMouseCursor = true;
   moving = false;
   // If set to true, we do not mark circles on the map.
-  marked_circles = false;
+  marked_circles = true;
   DefaultMouseCursor = EMouseCursor::Crosshairs;
 }
 
@@ -102,7 +102,7 @@ void AbfmeReforgedPlayerController::SetupInputComponent()
   InputComponent->BindAction("SetDestination", IE_Pressed, this, &AbfmeReforgedPlayerController::OnSetDestinationPressed);
   InputComponent->BindAction("SetDestination", IE_Released, this, &AbfmeReforgedPlayerController::OnSetDestinationReleased);
 
-  // support touch devices 
+  // support touch devices
   InputComponent->BindTouch(EInputEvent::IE_Pressed, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
   InputComponent->BindTouch(EInputEvent::IE_Repeat, this, &AbfmeReforgedPlayerController::MoveToTouchLocation);
 }
@@ -151,6 +151,7 @@ void AbfmeReforgedPlayerController::ComputePathToCursor()
         path_plan.final_destination.Z);
     bool success = ComputeTurningRadiusAwarePathTo(
         path_plan.final_destination);
+    marked_circles = true;
     if (!success)
     {
       UE_LOG(LogTemp, Log, TEXT("Failed to construct turning radius path."));
@@ -171,9 +172,49 @@ void AbfmeReforgedPlayerController::ComputePathToCursor()
   }
 }
 
+FVector PositiveHeadingTangentToCircleAtPoint(
+    const FVector& center, const FVector& tangent_point)
+{
+  if (center.Y == tangent_point.Y)
+  {
+    // The tangent line for this point would be perfectly vertical so the slope
+    // would be undefined.  Thus, we special case this by returning the
+    // appropriate heading vector directly.
+    return tangent_point.X > center.X ? FVector(0, 1, 0) : FVector(0, -1, 0);
+  }
+  float tangent_line_slope =
+    (center.Y - tangent_point.Y) / (tangent_point.X - center.X);
+  // Define a lambda for the equation of the line (using point slope form)
+  // which is perpendicular to the circle at the specified tangent point.
+  auto y = [tangent_point, tangent_line_slope](float x)
+  {
+    return tangent_line_slope * (x - tangent_point.X) + tangent_point.Y;
+  };
+  // Could be any positive value (we will scale to unit vector size).
+  // Move forward along X and use equation of the line to determine change in Y.
+  float delta_x = 1;
+  float delta_y = y(tangent_point.X + delta_x) - tangent_point.Y;
+  FVector orientation_vector(delta_x, delta_y, 0);
+  float magnitude = orientation_vector.Size();
+  orientation_vector /= magnitude;
+  // In a left handed coordinate system, we want to move in the direction of
+  // increasing X only when we are between -pi and 0 radians. So if the
+  // tangent point's Y value indicates that we are between 0 and pi radians,
+  // we should invert the orientation vector calculated above which was computed
+  // based on dX > 0 (the value of X increasing).
+  if (tangent_point.Y > center.Y)
+  {
+    orientation_vector *= -1;
+  }
+  return orientation_vector;
+}
+
+
 void InterpolateArcBetween(
-    FVector center, float radius, FVector actor_loc, FVector final_point_on_circle,
-    AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan, bool is_left_circle, float speed)
+    const FVector& center, float radius, const FVector& actor_loc,
+    const FVector& final_point_on_circle,
+    AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan,
+    bool is_left_circle, float speed)
 {
   float actor_theta = FGenericPlatformMath::Atan2(
       actor_loc.Y - center.Y, actor_loc.X - center.X);
@@ -209,6 +250,8 @@ void InterpolateArcBetween(
           radius * FGenericPlatformMath::Sin(theta) + center.Y,
           actor_loc.Z);
       path_plan->initial_waypoints.Push(arc_point);
+      path_plan->forward_vectors.Push(
+          -1 * PositiveHeadingTangentToCircleAtPoint(center, arc_point));
     }
   }
   else
@@ -221,12 +264,14 @@ void InterpolateArcBetween(
           radius * FGenericPlatformMath::Sin(theta) + center.Y,
           actor_loc.Z);
       path_plan->initial_waypoints.Push(arc_point);
+      path_plan->forward_vectors.Push(
+          PositiveHeadingTangentToCircleAtPoint(center, arc_point));
     }
   }
 }
 
 void InterpolateLineSegmentBetween(
-    FVector p1, FVector p2, float speed, float actor_z_loc,
+    const FVector& p1, const FVector& p2, float speed, float actor_z_loc,
     AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan)
 {
   float delta_y = p2.Y - p1.Y;
@@ -237,15 +282,21 @@ void InterpolateLineSegmentBetween(
   float dy = speed * FGenericPlatformMath::Sin(
       FGenericPlatformMath::Atan2(delta_y, delta_x));
   int steps_needed = static_cast<int>(distance / speed);
+  // Since it is travel along a line segment, the actor will use the same
+  // orientation throughout the travel. Get a unit vector in the direction of
+  // the line.
+  FVector orientation = (p2 - p1) / (p2 - p1).Size();
   for (int i = 0; i < steps_needed; ++i)
   {
     FVector point(p1.X + i * dx, p1.Y + i * dy, actor_z_loc);
     path_plan->initial_waypoints.Push(point);
+    path_plan->forward_vectors.Push(orientation);
   }
 }
 
-void SetPathPlanArcAndLine(FVector circle_center, float radius,
-    FVector actor_loc, FVector final_point_on_circle, FVector destination,
+bool SetPathPlanArcAndLine(
+    const FVector& circle_center, float radius, const FVector& actor_loc,
+    const FVector& final_point_on_circle, const FVector& destination,
     AbfmeReforgedPlayerController::TurningRadiusAwarePathPlan* path_plan,
     bool is_left_circle, float speed, UWorld* world, bool marked)
 {
@@ -255,7 +306,8 @@ void SetPathPlanArcAndLine(FVector circle_center, float radius,
       final_point_on_circle, path_plan, is_left_circle, speed);
   int arc_waypoints = path_plan->initial_waypoints.Num();
   UE_LOG(LogTemp, Log, TEXT("There were %d arc waypoints."), arc_waypoints);
-  if (arc_waypoints > 0) {
+  if (arc_waypoints > 0)
+  {
     UE_LOG(LogTemp, Log, TEXT("Final arc waypoint was (%f, %f, %f)."),
         path_plan->initial_waypoints.Last().X,
         path_plan->initial_waypoints.Last().Y,
@@ -265,23 +317,41 @@ void SetPathPlanArcAndLine(FVector circle_center, float radius,
       final_point_on_circle, destination, speed, actor_loc.Z, path_plan);
   path_plan->initial_waypoints.Push(destination);
   // This is silly, let's put them in the path in the correct order initially.
-  TArray<FVector> copy = path_plan->initial_waypoints;
+  TArray<FVector> waypoints = path_plan->initial_waypoints;
+  TArray<FVector> forwards = path_plan->forward_vectors;
+  bool update_headings = false;
+  if (update_headings && (waypoints.Num() != forwards.Num()))
+  {
+    // Consider bundling the location and orientation into a single struct
+    // so we can statically eliminate this "should never happen" error.
+    UE_LOG(LogTemp, Log,
+        TEXT("Found %d headings and %d waypoints. These should be the same."),
+        waypoints.Num(), forwards.Num());
+    path_plan->initial_waypoints.Empty();
+    path_plan->forward_vectors.Empty();
+    return false;
+  }
   path_plan->initial_waypoints.Empty();
-  for (int i = 0; i < copy.Num(); ++i)
+  path_plan->forward_vectors.Empty();
+  for (int i = 0; i < waypoints.Num(); ++i)
   {
     if (!marked) {
       FRotator rotation(0,0,0);
       FActorSpawnParameters params;
       params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-      world->SpawnActor<AMarkerActor>(copy[copy.Num() - i - 1], rotation, params);
+      world->SpawnActor<AMarkerActor>(waypoints[waypoints.Num() - i - 1], rotation, params);
     }
-    path_plan->initial_waypoints.Push(copy[copy.Num() - i - 1]);
+    path_plan->initial_waypoints.Push(waypoints[waypoints.Num() - i - 1]);
+    if (update_headings) {
+      path_plan->forward_vectors.Push(forwards[forwards.Num() - i - 1]);
+    }
   }
+  return true;
 }
 
 void FindSlopesTangentToCircle(
-    FVector circle_center, float radius, FVector destination,
-    float* m1, float* m2)
+    const FVector& circle_center, float radius,
+    const FVector& destination, float* m1, float* m2)
 {
   float px = destination.X;
   float py = destination.Y;
@@ -299,8 +369,8 @@ void FindSlopesTangentToCircle(
 }
 
 void TangentIntersectionOfCircleAndLine(
-    FVector circle_center, float circle_radius,
-    FVector point_on_line, float tangent_line_slope,
+    const FVector& circle_center, float circle_radius,
+    const FVector& point_on_line, float tangent_line_slope,
     FVector* tangent_intersection)
 {
   float px = point_on_line.X;
@@ -328,7 +398,7 @@ enum TangentPointOrdinal {
 };
 
 void FindTangentIntersections(
-    FVector circle_center, float radius, FVector destination,
+    const FVector& circle_center, float radius, const FVector& destination,
     FVector* tan_intersect_1, FVector* tan_intersect_2)
 {
   float m1, m2;
@@ -345,8 +415,8 @@ void FindTangentIntersections(
 // value of the angle increases.  In UE4's left handed coordinate system, this
 // means rotation clockwise from the actor's angle.
 TangentPointOrdinal DetermineFirstIntersectionPointEncountered(
-    FVector actor_loc, FVector tan_intersect_1, FVector tan_intersect_2,
-    FVector circle_center)
+    const FVector& actor_loc, const FVector& tan_intersect_1,
+    const FVector& tan_intersect_2, const FVector& circle_center)
 {
   float theta_actor = FGenericPlatformMath::Atan2(
       actor_loc.Y - circle_center.Y,
@@ -378,8 +448,9 @@ TangentPointOrdinal DetermineFirstIntersectionPointEncountered(
 }
 
 FVector SelectAppropriateWaypoint(
-    FVector actor_loc, FVector tan_intersect_1, FVector tan_intersect_2,
-    FVector circle_center, bool is_left_circle)
+    const FVector& actor_loc,
+    const FVector& tan_intersect_1, const FVector& tan_intersect_2,
+    const FVector& circle_center, bool is_left_circle)
 {
   TangentPointOrdinal first_intersection =
     DetermineFirstIntersectionPointEncountered(
@@ -396,8 +467,9 @@ FVector SelectAppropriateWaypoint(
   return tan_intersect_2;
 }
 
-FVector SelectWaypointOnCircle(FVector actor_loc, FVector circle_center,
-    float radius, FVector destination, bool is_left_circle)
+FVector SelectWaypointOnCircle(
+    const FVector& actor_loc, const FVector& circle_center,
+    float radius, const FVector& destination, bool is_left_circle)
 {
   FVector tan_intersect_1, tan_intersect_2;
   FindTangentIntersections(
@@ -480,11 +552,20 @@ bool AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
   float dist_right_center = FVector::Dist(right_circle_center, destination);
   if (dist_left_center < turning_radius || dist_right_center < turning_radius)
   {
+    UE_LOG(LogTemp, Log, TEXT("Destination within turning radius."));
     // We are close enough to the destination we just need to turn and move
     // slightly forward.  We will implement this later as it should be the
     // simple case.  Using the turning radius is the more interesting case.
     // For now, just set the final destination and use default pathfinding.
-    path_plan.initial_waypoints.Push(destination);
+    InterpolateLineSegmentBetween(
+        actor_loc, destination, actor_speed, actor_loc.Z, &path_plan);
+    // This is silly, let's put them in the path in the correct order initially.
+    TArray<FVector> waypoints = path_plan.initial_waypoints;
+    path_plan.initial_waypoints.Empty();
+    for (int i = 0; i < waypoints.Num(); ++i)
+    {
+      path_plan.initial_waypoints.Push(waypoints[waypoints.Num() - i - 1]);
+    }
     // TODO: Set forward_vectors to final destination.
     // Consider edge case of speed * tick_duration << turning radius,
     // in which case there could be a situation where rotation + directly
@@ -496,7 +577,7 @@ bool AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
     FVector final_point_on_circle = SelectWaypointOnCircle(
         actor_loc, left_circle_center, turning_radius,
         destination, /*is_left_circle=*/true);
-    SetPathPlanArcAndLine(
+    return SetPathPlanArcAndLine(
         left_circle_center, turning_radius, actor_loc, final_point_on_circle,
         destination, &path_plan, /*is_left_circle=*/true, actor_speed,
         GetWorld(), marked_circles);
@@ -505,16 +586,15 @@ bool AbfmeReforgedPlayerController::ComputeTurningRadiusAwarePathTo(
     FVector final_point_on_circle = SelectWaypointOnCircle(
         actor_loc, right_circle_center, turning_radius,
         destination, /*is_left_circle=*/false);
-    SetPathPlanArcAndLine(
+    return SetPathPlanArcAndLine(
         right_circle_center, turning_radius, actor_loc,
         final_point_on_circle, destination, &path_plan,
         /*is_left_circle=*/false, actor_speed, GetWorld(), marked_circles);
   }
-  marked_circles = true;
-  return true;
 }
 
-void AbfmeReforgedPlayerController::MoveToTouchLocation(const ETouchIndex::Type FingerIndex, const FVector Location)
+void AbfmeReforgedPlayerController::MoveToTouchLocation(
+    const ETouchIndex::Type FingerIndex, FVector Location)
 {
   FVector2D ScreenSpaceLocation(Location);
 
@@ -645,7 +725,7 @@ void MoveWithTurnRadius(
   // }
 }
 
-void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLocation)
+void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector& DestLocation)
 {
   // FString display = TEXT("Running SetNewMoveDestination.");
   // GEngine->AddOnScreenDebugMessage(-1, 1.0, FColor::Red, display);
@@ -677,17 +757,19 @@ void AbfmeReforgedPlayerController::SetNewMoveDestination(const FVector DestLoca
       // Just for testing purposes, until we tie speeds to TickRate, we will
       // only have the next point pop off a certain percentage of the time. This
       // will ensure it is slow enough to see what is going on while debugging.
-      // if (FMath::RandRange(0, 50) == 0)
-      if (false)
+      // if (FMath::RandRange(0, 100) == 0)
+      if (true)
       {
-        // Move to the next waypoint. TODO: Update unit forward vector.
+        // Move to the next waypoint.
         FVector waypoint = path_plan.initial_waypoints.Pop();
+        // FVector orientation = path_plan.forward_vectors.Pop();
         // UE_LOG(LogTemp, Log, TEXT("Moving to waypoint (%f,%f,%f)"),
         //     waypoint.X, waypoint.Y, 0);
         bool check_for_collisions_on_path = false;
         FHitResult hit_result;
         MyPawn->SetActorLocation(waypoint, check_for_collisions_on_path,
             &hit_result, ETeleportType::TeleportPhysics);
+        // MyPawn->SetActorRotation(orientation.Rotation());
       }
     }
   }
